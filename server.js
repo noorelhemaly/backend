@@ -10,7 +10,6 @@ const server = express()
 const port = 500
 const secert_key = 'qwertasdfzxcv'
 
-server.use(bcrypt())
 server.use(cors())
 server.use(express.json())
 server.use(cookieParser())
