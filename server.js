@@ -11,8 +11,9 @@ const port = 3001
 const secret_key = 'verySecretkey'
 
 server.use("/uploads", express.static("uploads"));
+
 server.use(cors({ 
-    origin: "http://localhost:3000", 
+    origin: "http://localhost:3002", 
     credentials: true 
     }))
 server.use(express.json())
@@ -112,29 +113,64 @@ server.get("/admin/view_users", verifyToken, (req, res) => {
     })
   })  
 
-  server.post("/admin/create_listing", upload.array("images", 5), verifyToken, (req, res) => {
+  server.post("/admin/create_listing", upload.single("image"), verifyToken, (req, res) => {
     const { category, name, brand, style, size, color, hardware, material, startingBid, duration } = req.body;
-    const imagePaths = req.files ? req.files.map((file) => `/uploads/${file.filename}`) : null;
-    if (!imagePaths || imagePaths.length === 0) {
-      return res.status(400).send("At least one image is required.");
+    const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+    if (!imageUrl) {
+      return res.status(400).send("Image is required.");
     }
     const endAt = new Date();
     endAt.setDate(endAt.getDate() + parseInt(duration));
-  
     db.run(
-      `INSERT INTO LISTING (CATEGORY, IMAGE_PATHS, NAME, BRAND, STYLE, SIZE, COLOR, HARDWARE, MATERIAL, STARTING_BID, CURRENT_BID, DURATION, END_AT)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ category, JSON.stringify(imagePaths),  name, brand, style, size, color, hardware, material, parseFloat(startingBid), parseFloat(startingBid), parseInt(duration), endAt.toISOString()],
+      `INSERT INTO LISTING (CATEGORY, IMAGE_URL, NAME, BRAND, STYLE, SIZE, COLOR, HARDWARE, MATERIAL, STARTING_BID, CURRENT_BID, DURATION, END_AT)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [category, imageUrl, name, brand, style, size, color, hardware, material, parseFloat(startingBid), parseFloat(startingBid), parseInt(duration), endAt.toISOString()],
       (err) => {
         if (err) {
           console.error("Error saving listing to database:", err.message);
           return res.status(500).send("Error saving listing to database.");
         }
-  
         console.log("New Listing Saved to Database:", { name, category });
         res.status(200).json({ message: "Listing created successfully!" });
       })
   })
+  
+  server.get("/admin/all_listings", verifyToken, (req, res) => {
+    const isAdmin = req.userDetails.isAdmin;
+    if (!isAdmin) {
+      return res.status(403).send("You are not an admin");
+    }
+    db.all("SELECT * FROM LISTING", (err, rows) => {
+      if (err) {
+        console.error("Error retrieving listings:", err.message);
+        return res.status(500).send("Error retrieving listings");
+      }
+      res.status(200).json(rows);
+    });
+  });
+  
+server.get("/listings/handbags", (req, res) => {
+  db.all("SELECT * FROM LISTING WHERE CATEGORY = 'Handbags'", 
+  (err, rows) => {
+    if (err) {
+      console.error("Error retrieving handbags:", err.message);
+    return res.status(500).send("Error retrieving handbags");
+    }
+    res.status(200).json(rows);
+  })
+})
+
+server.get("/listings/watches", (req, res) => {
+  db.all("SELECT * FROM LISTING WHERE CATEGORY = 'Watches'", 
+  (err, rows) => {
+    if (err) {
+      console.error("Error retrieving watches:", err.message);
+    return res.status(500).send("Error retrieving watches");
+    }
+    res.status(200).json(rows);
+  });
+});
+
 
 server.put('/admin/edit_listing/:id/:startingbid', verifyToken, (req, res) => {
     const isAdmin = req.userDetails.isAdmin
@@ -153,44 +189,6 @@ server.put('/admin/edit_listing/:id/:startingbid', verifyToken, (req, res) => {
                 return res.send(`Listing updated successfully`)
             }
         })
-})
-
-//Get All Listings (Admin)
-server.get("/admin/all_listings", verifyToken, (req, res) => {
-    console.log("User details:", req.userDetails) // Debug log
-    const isAdmin = req.userDetails.isAdmin
-    if (!isAdmin) {
-        console.error("Access denied: User is not an admin.")
-        return res.status(403).send("You are not an admin")
-    }
-    db.all("SELECT * FROM LISTING", (err, rows) => {
-        if (err) {
-            console.error("Error retrieving listings:", err.message)
-            return res.status(500).send("Error retrieving listings")
-        }
-        console.log("Listings retrieved successfully:", rows) // Debug log
-        res.status(200).json(rows)
-    })
-})
-
-
-server.get("/listings/handbags", (req, res) => {
-    db.all(`SELECT * FROM LISTING WHERE CATEGORY = 'Handbags'`, (err, rows) => {
-        if (err) {
-            return res.status(500).send("Error retrieving handbags")
-        }
-        res.status(200).json(rows)
-    })
-})
-
-// Fetch Only Watches Listings
-server.get("/listings/watches", (req, res) => {
-    db.all(`SELECT * FROM LISTING WHERE CATEGORY = 'Watches'`, (err, rows) => {
-        if (err) {
-            return res.status(500).send("Error retrieving watches")
-        }
-        res.status(200).json(rows)
-    })
 })
 
 //Get active listing
