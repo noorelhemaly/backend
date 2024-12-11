@@ -1,5 +1,6 @@
 const express = require("express")
 const cors = require('cors')
+const multer = require("multer")
 const jwt = require('jsonwebtoken')
 const cookieParser = require("cookie-parser")
 const db_access = require("./db")
@@ -9,12 +10,23 @@ const server = express()
 const port = 3001
 const secret_key = 'verySecretkey'
 
+server.use("/uploads", express.static("uploads"));
 server.use(cors({ 
     origin: "http://localhost:3000", 
     credentials: true 
     }))
 server.use(express.json())
 server.use(cookieParser())
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, "uploads/"); 
+    },
+    filename: (req, file, cb) => {
+      cb(null, Date.now() + "-" + file.originalname); 
+    },
+  });
+  const upload = multer({ storage });
 
 const generateToken= (id, isAdmin) =>{
     return jwt.sign({id,isAdmin}, secret_key, {expiresIn: '1h'})
@@ -100,29 +112,29 @@ server.get("/admin/view_users", verifyToken, (req, res) => {
     })
   })  
 
-server.post('/admin/create_listing', verifyToken, (req, res) => {
-    console.log(`user details: ${JSON.stringify(req.userDetails)}`)
-    const isAdmin = req.userDetails.isAdmin
-    if(isAdmin!== 1)
-        return res.status(403).send("you are not an admin")
-
-    const {category, imageUrl,name,brand,style,size,color,hardware,material,startingBid,duration} = req.body
-    const endAt = new Date()
-    endAt.setDate(endAt.getDate() + parseInt(duration))
-
+  server.post("/admin/create_listing", upload.array("images", 5), verifyToken, (req, res) => {
+    const { category, name, brand, style, size, color, hardware, material, startingBid, duration } = req.body;
+    const imagePaths = req.files ? req.files.map((file) => `/uploads/${file.filename}`) : null;
+    if (!imagePaths || imagePaths.length === 0) {
+      return res.status(400).send("At least one image is required.");
+    }
+    const endAt = new Date();
+    endAt.setDate(endAt.getDate() + parseInt(duration));
+  
     db.run(
-        `INSERT INTO LISTING (CATEGORY, IMAGE_URL, NAME, BRAND, STYLE, SIZE, COLOR, HARDWARE, MATERIAL, STARTING_BID, CURRENT_BID, DURATION, END_AT)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [category, imageUrl, name, brand, style, size, color, hardware, material, startingBid, startingBid, duration, endAt.toISOString()],
-        (err) => { 
-            if (err) {
-                console.error("Error creating listing:", err.message)
-                return res.status(500).send("Error creating listing.")
-            }
-            res.status(200).send(`Listing created for ${category} ending on ${endAt.toISOString()}.`)
-        })
-})
-
+      `INSERT INTO LISTING (CATEGORY, IMAGE_PATHS, NAME, BRAND, STYLE, SIZE, COLOR, HARDWARE, MATERIAL, STARTING_BID, CURRENT_BID, DURATION, END_AT)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [ category, JSON.stringify(imagePaths),  name, brand, style, size, color, hardware, material, parseFloat(startingBid), parseFloat(startingBid), parseInt(duration), endAt.toISOString()],
+      (err) => {
+        if (err) {
+          console.error("Error saving listing to database:", err.message);
+          return res.status(500).send("Error saving listing to database.");
+        }
+  
+        console.log("New Listing Saved to Database:", { name, category });
+        res.status(200).json({ message: "Listing created successfully!" });
+      })
+  })
 
 server.put('/admin/edit_listing/:id/:startingbid', verifyToken, (req, res) => {
     const isAdmin = req.userDetails.isAdmin
@@ -145,18 +157,22 @@ server.put('/admin/edit_listing/:id/:startingbid', verifyToken, (req, res) => {
 
 //Get All Listings (Admin)
 server.get("/admin/all_listings", verifyToken, (req, res) => {
+    console.log("User details:", req.userDetails) // Debug log
     const isAdmin = req.userDetails.isAdmin
-    if(isAdmin!== 1)
-        return res.status(403).send("you are not an admin")
-
+    if (!isAdmin) {
+        console.error("Access denied: User is not an admin.")
+        return res.status(403).send("You are not an admin")
+    }
     db.all("SELECT * FROM LISTING", (err, rows) => {
         if (err) {
             console.error("Error retrieving listings:", err.message)
             return res.status(500).send("Error retrieving listings")
         }
+        console.log("Listings retrieved successfully:", rows) // Debug log
         res.status(200).json(rows)
     })
 })
+
 
 server.get("/listings/handbags", (req, res) => {
     db.all(`SELECT * FROM LISTING WHERE CATEGORY = 'Handbags'`, (err, rows) => {
@@ -193,6 +209,25 @@ server.get('/listings', (req, res) => {
         }
     )
 })
+
+server.get("/listing/:id", (req, res) => {
+    const listingId = req.params.id;
+  
+    db.get(
+      "SELECT * FROM LISTING WHERE ID = ?",
+      [listingId],
+      (err, row) => {
+        if (err) {
+          console.error("Error fetching listing details:", err.message);
+          return res.status(500).send("Error retrieving listing details.");
+        }
+        if (!row) {
+          return res.status(404).send("Listing not found.");
+        }
+        res.status(200).json(row);
+      }
+    );
+  });  
 
 //Delete Listing (Admin)
 server.delete("/admin/delete_listing/:id", verifyToken, (req, res) => {
