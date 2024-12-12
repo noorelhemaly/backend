@@ -13,7 +13,7 @@ const secret_key = 'verySecretkey'
 server.use("/uploads", express.static("uploads"))
 
 server.use(cors({ 
-    origin: "http://localhost:3002", 
+    origin: "http://localhost:3000", 
     credentials: true 
     }))
 server.use(express.json())
@@ -197,46 +197,89 @@ server.get("/listing/:id", (req, res) => {
   )
 })  
 
-//Admin Editing
-server.put('/admin/edit_listing/:id/:startingbid', verifyToken, (req, res) => {
-  const isAdmin = req.userDetails.isAdmin
-  if(isAdmin!== 1)
-    return res.status(403).send("you are not an admin")
-    const query = `UPDATE LISTING SET STARTING_BID=${parseInt(req.params.startingbid, 10)}
-      WHERE ID=${req.params.id}`
-      db.run(query, (err) => {
-        if (err) {
-          console.log(err)
-          return res.send(err)
-        }
-        else {
-          return res.send(`Listing updated successfully`)
-          }
-    })
+//admin bid viewing
+server.get("/admin/bids", verifyToken, (req, res) => {
+  if (!req.userDetails.isAdmin) {
+    return res.status(403).send("Access denied.")
+  }
+
+  db.all(
+    `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, U.NAME AS USER_NAME, L.NAME AS LISTING_NAME 
+     FROM BIDDING B
+     JOIN USER U ON B.USER_ID = U.ID
+     JOIN LISTING L ON B.LISTING_ID = L.ID`,
+    (err, rows) => {
+      if (err) {
+        console.error(err.message)
+        return res.status(500).send("Error fetching bids.")
+      }
+      res.json(rows)
+    }
+  )
 })
+
+
+//Admin Editing
+server.put("/admin/edit_duration/:id/:additionalDays", verifyToken, (req, res) => {
+  const isAdmin = req.userDetails.isAdmin
+  if (!isAdmin) {
+    return res.status(403).send("You are not an admin")
+  }
+  const listingId = req.params.id
+  const additionalDays = parseInt(req.params.additionalDays, 10)
+
+  db.get("SELECT END_AT FROM LISTING WHERE ID = ?", [listingId], (err, row) => {
+    if (err) {
+      console.error("Error fetching listing:", err.message)
+      return res.status(500).send("Error fetching listing.")
+    }
+    if (!row) {
+      return res.status(404).send("Listing not found.")
+    }
+
+    const currentEndAt = new Date(row.END_AT)
+    currentEndAt.setDate(currentEndAt.getDate() + additionalDays)
+
+    db.run(
+      "UPDATE LISTING SET END_AT = ? WHERE ID = ?",
+      [currentEndAt.toISOString(), listingId],
+      (err) => {
+        if (err) {
+          console.error("Error updating listing duration:", err.message)
+          return res.status(500).send("Error updating listing duration.")
+        }
+        res.status(200).send("Duration extended successfully.")
+      }
+    )
+  })
+})
+
 
 //Delete Listing (Admin)
 server.delete("/admin/delete_listing/:id", verifyToken, (req, res) => {
   const isAdmin = req.userDetails.isAdmin
-  if(isAdmin!== 1)
-      return res.status(403).send("you are not an admin")
+  if (!isAdmin) {
+    return res.status(403).send("You are not an admin")
+  }
 
   const listingId = req.params.id
 
   db.run("DELETE FROM LISTING WHERE ID = ?", [listingId], (err) => {
-      if (err) {
-          return res.status(500).send("Error deleting listing")
-      }
-      res.status(200).send("Listing deleted successfully")
+    if (err) {
+      console.error("Error deleting listing:", err.message)
+      return res.status(500).send("Error deleting listing")
+    }
+    res.status(200).send("Listing deleted successfully")
   })
 })
+
 
 //Get active listing
 server.get('/listings', (req, res) => {
     const currentTime = new Date().toISOString()
 
     db.all(
-        `SELECT * FROM LISTING WHERE END_AT > ?`, // Only fetch active listings
+        `SELECT * FROM LISTING WHERE END_AT > ?`, 
         [currentTime],
         (err, rows) => {
             if (err) {
@@ -290,23 +333,44 @@ server.post("/bid", verifyToken, (req, res) => {
         })
 })
 
-server.get('/listing/:id/current_bid', (req, res) => {
-    const listingId = req.params.id
+//User Bids
+server.get("/user/bids", verifyToken, (req, res) => {
+  const userId = req.userDetails.id
 
-    db.get(
-        "SELECT CURRENT_BID FROM LISTING WHERE ID = ?",
-        [listingId],
-        (err, listing) => {
-            if (err) {
-                console.error("Error fetching current bid:", err.message)
-                return res.status(500).send("Error fetching current bid.")
-            }
-            if (!listing) {
-                return res.status(404).send("Listing not found.")
-            }
-            res.status(200).json({ currentBid: listing.CURRENT_BID })
-        }
-    )
+  db.all(
+    `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, L.NAME AS LISTING_NAME 
+     FROM BIDDING B
+     JOIN LISTING L ON B.LISTING_ID = L.ID
+     WHERE B.USER_ID = ?`,
+    [userId],
+    (err, rows) => {
+      if (err) {
+        console.error(err.message)
+        return res.status(500).send("Error fetching user bids.")
+      }
+      res.json(rows)
+    }
+  )
+})
+
+// Bids in Listing Page
+server.get("/listing/:id/bids", (req, res) => {
+  const listingId = req.params.id
+
+  db.all(
+    `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, U.NAME AS USER_NAME 
+     FROM BIDDING B
+     JOIN USER U ON B.USER_ID = U.ID
+     WHERE B.LISTING_ID = ?`,
+    [listingId],
+    (err, rows) => {
+      if (err) {
+        console.error("Error retrieving bids for listing:", err.message)
+        return res.status(500).send("Error retrieving bids.")
+      }
+      res.json(rows)
+    }
+  )
 })
 
 const checkExpiredListings = () => {
@@ -325,7 +389,6 @@ const checkExpiredListings = () => {
 }
 
 setInterval(checkExpiredListings, 60000)
-
 
 server.listen(port, () => {
     console.log(`Server running on port ${port}`)
