@@ -29,6 +29,10 @@ const storage = multer.diskStorage({
   })
   const upload = multer({ storage })
 
+  const formatTimeToLocal = (utcTime) => {
+    const date = new Date(utcTime) 
+    return date.toLocaleString() 
+  }
 const generateToken= (id, isAdmin) =>{
     return jwt.sign({id,isAdmin}, secret_key, {expiresIn: '1h'})
 }
@@ -127,7 +131,7 @@ server.post("/admin/create_listing", upload.single("image"), verifyToken, (req, 
   db.run(
     `INSERT INTO LISTING (CATEGORY, IMAGE_URL, NAME, BRAND, STYLE, SIZE, COLOR, HARDWARE, MATERIAL, STARTING_BID, CURRENT_BID, DURATION, END_AT)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [category, imageUrl, name, brand, style, size, color, hardware, material, parseFloat(startingBid), parseFloat(startingBid), parseInt(duration), endAt.toISOString()],
+    [category, imageUrl, name, brand, style, size, color, hardware, material, parseFloat(startingBid), parseFloat(startingBid), parseInt(duration), utcEndAt],
   (err) => {
     if (err) {
       console.error("Error saving listing to database:", err.message)
@@ -207,7 +211,8 @@ server.get("/admin/bids", verifyToken, (req, res) => {
     `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, U.NAME AS USER_NAME, L.NAME AS LISTING_NAME 
      FROM BIDDING B
      JOIN USER U ON B.USER_ID = U.ID
-     JOIN LISTING L ON B.LISTING_ID = L.ID`,
+     JOIN LISTING L ON B.LISTING_ID = L.ID
+     ORDER BY B.CREATED_AT DESC`,
     (err, rows) => {
       if (err) {
         console.error(err.message)
@@ -225,34 +230,40 @@ server.put("/admin/edit_duration/:id/:additionalDays", verifyToken, (req, res) =
   if (!isAdmin) {
     return res.status(403).send("You are not an admin")
   }
+
   const listingId = req.params.id
   const additionalDays = parseInt(req.params.additionalDays, 10)
 
-  db.get("SELECT END_AT FROM LISTING WHERE ID = ?", [listingId], (err, row) => {
+  db.get("SELECT END_AT FROM LISTING WHERE ID = ?", [listingId], (err, listing) => {
     if (err) {
       console.error("Error fetching listing:", err.message)
       return res.status(500).send("Error fetching listing.")
     }
-    if (!row) {
+    if (!listing) {
       return res.status(404).send("Listing not found.")
     }
 
-    const currentEndAt = new Date(row.END_AT)
-    currentEndAt.setDate(currentEndAt.getDate() + additionalDays)
+    const currentTime = new Date().toISOString()
+    if (listing.END_AT <= currentTime) {
+      return res.status(400).send("Cannot extend the duration of an expired listing.")
+    }
+
+    const endAt = new Date(listing.END_AT)
+    endAt.setDate(endAt.getDate() + additionalDays)
 
     db.run(
       "UPDATE LISTING SET END_AT = ? WHERE ID = ?",
-      [currentEndAt.toISOString(), listingId],
-      (err) => {
-        if (err) {
-          console.error("Error updating listing duration:", err.message)
+      [endAt.toISOString(), listingId],
+      (updateErr) => {
+        if (updateErr) {
+          console.error("Error updating listing duration:", updateErr.message)
           return res.status(500).send("Error updating listing duration.")
         }
         res.status(200).send("Duration extended successfully.")
-      }
-    )
+      })
   })
 })
+
 
 
 //Delete Listing (Admin)
@@ -273,65 +284,53 @@ server.delete("/admin/delete_listing/:id", verifyToken, (req, res) => {
   })
 })
 
-
-//Get active listing
-server.get('/listings', (req, res) => {
-    const currentTime = new Date().toISOString()
-
-    db.all(
-        `SELECT * FROM LISTING WHERE END_AT > ?`, 
-        [currentTime],
-        (err, rows) => {
-            if (err) {
-                console.error("Error retrieving listings:", err.message)
-                return res.status(500).json({ error: "Error retrieving listings." })
-            }
-            res.status(200).json(rows)
-        }
-    )
-})
-
 // Place a Bid (User)
 server.post("/bid", verifyToken, (req, res) => {
-    const {listingId, bidAmount} = req.body
-    const userId = req.userDetails.id
+  const { listingId, bidAmount } = req.body
+  const userId = req.userDetails.id
 
-    console.log("Received listingId:", listingId)
-    db.get(
-        "SELECT * FROM LISTING WHERE ID = ?",
+  db.get(
+    "SELECT * FROM LISTING WHERE ID = ?",
+    [listingId],
+    (err, listing) => {
+      if (err) return res.status(500).send("Error fetching listing.")
+      if (!listing) return res.status(404).send("Listing not found.")
+
+      const currentTime = new Date().toISOString()
+      if (currentTime > listing.END_AT) {
+        return res.status(400).send("This listing has expired.")
+      }
+      if (bidAmount <= listing.CURRENT_BID) {
+        return res.status(400).send(`Your bid must be higher than the current bid of £${listing.CURRENT_BID}.`)
+      }
+
+      db.get(
+        "SELECT USER_ID FROM BIDDING WHERE LISTING_ID = ? ORDER BY BID_AMOUNT DESC LIMIT 1",
         [listingId],
-        (err, listing) => {
-            if (err) return res.status(500).send("Error fetching listing.")
-            if (!listing) return res.status(404).send("Listing not found.")
+        (err, highestBidder) => {
+          if (err) return res.status(500).send("Error checking highest bidder.")
+          if (highestBidder && highestBidder.USER_ID === userId) {
+            return res.status(400).send("You are already the highest bidder.")
+          }
 
-            const currentTime = new Date().toISOString()
-            if (currentTime > listing.END_AT) {
-                return res.status(400).send("This listing has expired.")
-            }
-            if (bidAmount <= listing.CURRENT_BID) {
-                return res.status(400).send(`Your bid must be higher than the current bid of ${listing.CURRENT_BID}.`)
-            }
+          db.run(
+            "UPDATE LISTING SET CURRENT_BID = ? WHERE ID = ?",
+            [bidAmount, listingId],
+            (err) => {
+              if (err) return res.status(500).send("Error updating current bid.")
 
-            db.run(
-                "UPDATE LISTING SET CURRENT_BID = ? WHERE ID = ?",
-                [bidAmount, listingId],
+              db.run(
+                "INSERT INTO BIDDING (USER_ID, LISTING_ID, BID_AMOUNT, CREATED_AT) VALUES (?, ?, ?, ?)",
+                [userId, listingId, bidAmount, currentTime],
                 (err) => {
-                    if (err) {
-                        return res.status(500).send("Error updating current bid.")
-                    }
-
-                    db.run(
-                        "INSERT INTO BIDDING (USER_ID, LISTING_ID, BID_AMOUNT) VALUES (?, ?, ?)",
-                        [userId, listingId, bidAmount],
-                        (err) => {
-                            if (err) {
-                                return res.status(500).send("Error placing bid")
-                            }
-                            res.status(200).send("Bid placed successfully")
-                        })
+                  if (err) return res.status(500).send("Error placing bid.")
+                  res.status(200).send("Bid placed successfully.")
                 })
+            })
         })
+    })
 })
+
 
 //User Bids
 server.get("/user/bids", verifyToken, (req, res) => {
@@ -341,7 +340,8 @@ server.get("/user/bids", verifyToken, (req, res) => {
     `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, L.NAME AS LISTING_NAME 
      FROM BIDDING B
      JOIN LISTING L ON B.LISTING_ID = L.ID
-     WHERE B.USER_ID = ?`,
+     WHERE B.USER_ID = ?
+     ORDER BY B.CREATED_AT DESC`,
     [userId],
     (err, rows) => {
       if (err) {
@@ -358,20 +358,21 @@ server.get("/listing/:id/bids", (req, res) => {
   const listingId = req.params.id
 
   db.all(
-    `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, U.NAME AS USER_NAME 
-     FROM BIDDING B
-     JOIN USER U ON B.USER_ID = U.ID
-     WHERE B.LISTING_ID = ?`,
+    `SELECT BID_AMOUNT, CREATED_AT 
+     FROM BIDDING 
+     WHERE LISTING_ID = ? 
+     ORDER BY BID_AMOUNT DESC`, 
     [listingId],
     (err, rows) => {
       if (err) {
-        console.error("Error retrieving bids for listing:", err.message)
-        return res.status(500).send("Error retrieving bids.")
+        console.error("Error retrieving bid history:", err.message)
+        return res.status(500).send("Error retrieving bid history")
       }
-      res.json(rows)
+      res.status(200).json(rows)
     }
   )
 })
+
 
 const checkExpiredListings = () => {
     const currentTime = new Date().toISOString()
