@@ -158,7 +158,7 @@ server.get("/admin/all_listings", verifyToken, (req, res) => {
 })
 
 //Handbags Listings
-server.get("/listings/handbags", (req, res) => {
+server.get("/listings/handbags", verifyToken, (req, res) => {
   db.all("SELECT * FROM LISTING WHERE CATEGORY = 'Handbags'", 
   (err, rows) => {
     if (err) {
@@ -170,7 +170,7 @@ server.get("/listings/handbags", (req, res) => {
 })
 
 //Watches Listings
-server.get("/listings/watches", (req, res) => {
+server.get("/listings/watches", verifyToken, (req, res) => {
   db.all("SELECT * FROM LISTING WHERE CATEGORY = 'Watches'", 
   (err, rows) => {
     if (err) {
@@ -182,7 +182,7 @@ server.get("/listings/watches", (req, res) => {
 })
 
 //Specific Listing
-server.get("/listing/:id", (req, res) => {
+server.get("/listing/:id", verifyToken, (req, res) => {
   const listingId = req.params.id
 
   db.get(
@@ -354,7 +354,7 @@ server.get("/user/bids", verifyToken, (req, res) => {
 })
 
 // Bids in Listing Page
-server.get("/listing/:id/bids", (req, res) => {
+server.get("/listing/:id/bids", verifyToken, (req, res) => {
   const listingId = req.params.id
 
   db.all(
