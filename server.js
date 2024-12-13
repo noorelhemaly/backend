@@ -148,11 +148,18 @@ server.get("/admin/all_listings", verifyToken, (req, res) => {
   if (!isAdmin) {
     return res.status(403).send("You are not an admin")
   }
+  const currentTime = new Date().toISOString()
+
   db.all("SELECT * FROM LISTING", (err, rows) => {
     if (err) {
       console.error("Error retrieving listings:", err.message)
     return res.status(500).send("Error retrieving listings")
     }
+
+    const listings = rows.map((listing) => ({
+      ...listing,
+      isExpired: new Date(listing.END_AT) <= new Date(currentTime), 
+    }))
     res.status(200).json(rows)
   })
 })
