@@ -49,7 +49,7 @@ const verifyToken = (req, res, next) => {
     })
   }
 
-// User Registration
+// 1. User Registration
 server.post("/user/register", async (req, res) => {
     const { name, idnumber, email, password } = req.body
 
@@ -70,7 +70,7 @@ server.post("/user/register", async (req, res) => {
     })
 })
 
-//Any User or Admin same Login Route
+// 2. Any User or Admin same Login Route
 server.post("/login", async (req, res) => {
     const { email, password } = req.body
 
@@ -78,8 +78,8 @@ server.post("/login", async (req, res) => {
     const ADMIN_PASSWORD = "NoorsAuction"
     if (email === ADMIN_EMAIL) {
         if (password === ADMIN_PASSWORD) {
-            const token = generateToken(1, true) // Generate admin token
-            console.log("Generated Token (Admin):", token) // Debug log
+            const token = generateToken(1, true) 
+            console.log("Generated Token (Admin):", token) 
             return res.status(200).json({ token, admin: true })
         } else {
             return res.status(401).json({ message: "Invalid admin credentials" })
@@ -96,13 +96,13 @@ server.post("/login", async (req, res) => {
             return res.status(401).json({ message: "Invalid user credentials" })
         }
 
-        const token = generateToken(row.ID, row.ISADMIN) // Generate user token
-        console.log("Generated Token (User):", token) // Debug log
+        const token = generateToken(row.ID, row.ISADMIN) 
+        console.log("Generated Token (User):", token) 
         return res.status(200).json({ token, admin: row.ISADMIN === 1 })
     })
 })
 
-//Admin Users list
+// 3. Admin Users list
 server.get("/admin/view_users", verifyToken, (req, res) => {
     const isAdmin = req.userDetails.isAdmin 
     if (!isAdmin) {
@@ -119,7 +119,7 @@ server.get("/admin/view_users", verifyToken, (req, res) => {
     })
   })  
 
-  //Admin List Creation
+// 4. Admin List Creation
 server.post("/admin/create_listing", upload.single("image"), verifyToken, (req, res) => {
   const { category, name, brand, style, size, color, hardware, material, startingBid, duration } = req.body
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null
@@ -131,7 +131,7 @@ server.post("/admin/create_listing", upload.single("image"), verifyToken, (req, 
   db.run(
     `INSERT INTO LISTING (CATEGORY, IMAGE_URL, NAME, BRAND, STYLE, SIZE, COLOR, HARDWARE, MATERIAL, STARTING_BID, CURRENT_BID, DURATION, END_AT)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [category, imageUrl, name, brand, style, size, color, hardware, material, parseFloat(startingBid), parseFloat(startingBid), parseInt(duration), utcEndAt],
+    [category, imageUrl, name, brand, style, size, color, hardware, material, parseFloat(startingBid), parseFloat(startingBid), parseInt(duration), endAt.toISOString()],
   (err) => {
     if (err) {
       console.error("Error saving listing to database:", err.message)
@@ -142,7 +142,7 @@ server.post("/admin/create_listing", upload.single("image"), verifyToken, (req, 
     })
 })
   
-//Admin Accessing All Listings
+// 5. Admin Accessing All Listings
 server.get("/admin/all_listings", verifyToken, (req, res) => {
   const isAdmin = req.userDetails.isAdmin
   if (!isAdmin) {
@@ -157,9 +157,10 @@ server.get("/admin/all_listings", verifyToken, (req, res) => {
   })
 })
 
-//Handbags Listings
+// 6. Handbags Listings
 server.get("/listings/handbags", verifyToken, (req, res) => {
-  db.all("SELECT * FROM LISTING WHERE CATEGORY = 'Handbags'", 
+  db.all("SELECT * FROM LISTING WHERE CATEGORY = ?", 
+  ['Handbags'], 
   (err, rows) => {
     if (err) {
       console.error("Error retrieving handbags:", err.message)
@@ -169,10 +170,11 @@ server.get("/listings/handbags", verifyToken, (req, res) => {
   })
 })
 
-//Watches Listings
+// 7. Watches Listings
 server.get("/listings/watches", verifyToken, (req, res) => {
-  db.all("SELECT * FROM LISTING WHERE CATEGORY = 'Watches'", 
-  (err, rows) => {
+  db.all("SELECT * FROM LISTING WHERE CATEGORY = ?", 
+  ['Watches'], 
+  (err, rows) => { 
     if (err) {
       console.error("Error retrieving watches:", err.message)
     return res.status(500).send("Error retrieving watches")
@@ -181,8 +183,8 @@ server.get("/listings/watches", verifyToken, (req, res) => {
   })
 })
 
-//Specific Listing
-server.get("/listing/:id", verifyToken, (req, res) => {
+// 8. Specific Listing
+server.get("/listing/:id", (req, res) => {
   const listingId = req.params.id
 
   db.get(
@@ -201,30 +203,32 @@ server.get("/listing/:id", verifyToken, (req, res) => {
   )
 })  
 
-//admin bid viewing
+// 9. Admin bid viewing
 server.get("/admin/bids", verifyToken, (req, res) => {
-  if (!req.userDetails.isAdmin) {
-    return res.status(403).send("Access denied.")
+  const isAdmin = req.userDetails.isAdmin
+  if (!isAdmin) {
+    return res.status(403).send("You are not an admin")
   }
+  const query = `SELECT 
+    B.BID_AMOUNT, 
+    B.CREATED_AT, 
+    U.NAME AS USER_NAME, 
+    L.NAME AS LISTING_NAME
+    FROM BIDDING B
+    JOIN USER U ON B.USER_ID = U.ID
+    JOIN LISTING L ON B.LISTING_ID = L.ID
+    ORDER BY L.NAME ASC, B.BID_AMOUNT DESC`
 
-  db.all(
-    `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, U.NAME AS USER_NAME, L.NAME AS LISTING_NAME 
-     FROM BIDDING B
-     JOIN USER U ON B.USER_ID = U.ID
-     JOIN LISTING L ON B.LISTING_ID = L.ID
-     ORDER BY B.CREATED_AT DESC`,
-    (err, rows) => {
-      if (err) {
-        console.error(err.message)
-        return res.status(500).send("Error fetching bids.")
-      }
-      res.json(rows)
+  db.all(query, (err, rows) => {
+    if (err) {
+      console.error("Error retrieving recent bids:", err.message)
+      return res.status(500).send("Error retrieving recent bids")
     }
-  )
+    res.status(200).json(rows)
+  })
 })
 
-
-//Admin Editing
+// 10. Admin Editing
 server.put("/admin/edit_duration/:id/:additionalDays", verifyToken, (req, res) => {
   const isAdmin = req.userDetails.isAdmin
   if (!isAdmin) {
@@ -264,9 +268,7 @@ server.put("/admin/edit_duration/:id/:additionalDays", verifyToken, (req, res) =
   })
 })
 
-
-
-//Delete Listing (Admin)
+// 11. Delete Listing (Admin)
 server.delete("/admin/delete_listing/:id", verifyToken, (req, res) => {
   const isAdmin = req.userDetails.isAdmin
   if (!isAdmin) {
@@ -274,7 +276,6 @@ server.delete("/admin/delete_listing/:id", verifyToken, (req, res) => {
   }
 
   const listingId = req.params.id
-
   db.run("DELETE FROM LISTING WHERE ID = ?", [listingId], (err) => {
     if (err) {
       console.error("Error deleting listing:", err.message)
@@ -284,7 +285,7 @@ server.delete("/admin/delete_listing/:id", verifyToken, (req, res) => {
   })
 })
 
-// Place a Bid (User)
+// 12. Place a Bid (User)
 server.post("/bid", verifyToken, (req, res) => {
   const { listingId, bidAmount } = req.body
   const userId = req.userDetails.id
@@ -331,8 +332,7 @@ server.post("/bid", verifyToken, (req, res) => {
     })
 })
 
-
-//User Bids
+// 13. User Bids
 server.get("/user/bids", verifyToken, (req, res) => {
   const userId = req.userDetails.id
 
@@ -353,8 +353,8 @@ server.get("/user/bids", verifyToken, (req, res) => {
   )
 })
 
-// Bids in Listing Page
-server.get("/listing/:id/bids", verifyToken, (req, res) => {
+// 14. Bids in Listing Page
+server.get("/listing/:id/bids", (req, res) => {
   const listingId = req.params.id
 
   db.all(
@@ -373,7 +373,7 @@ server.get("/listing/:id/bids", verifyToken, (req, res) => {
   )
 })
 
-
+// 15. Check Expired Listings
 const checkExpiredListings = () => {
     const currentTime = new Date().toISOString()
 
@@ -388,7 +388,6 @@ const checkExpiredListings = () => {
             }
         })
 }
-
 setInterval(checkExpiredListings, 60000)
 
 server.listen(port, () => {
@@ -408,6 +407,5 @@ server.listen(port, () => {
         })
     })
 })
-
 
 module.exports = server
