@@ -29,25 +29,47 @@ const storage = multer.diskStorage({
   })
   const upload = multer({ storage })
 
-  const formatTimeToLocal = (utcTime) => {
-    const date = new Date(utcTime) 
-    return date.toLocaleString() 
-  }
 const generateToken= (id, isAdmin) =>{
     return jwt.sign({id,isAdmin}, secret_key, {expiresIn: '1h'})
 }
 
 const verifyToken = (req, res, next) => {
-    const token = req.cookies.authToken || req.headers.authorization?.split(" ")[1]
-    if (!token) 
-      return res.status(401).send("Unauthorized")
-    jwt.verify(token, secret_key, (err, details) => {
-      if (err)
-        return res.status(403).send("Invalid or expired token")
-      req.userDetails = details
-      next()
-    })
+  const token = req.cookies.authToken
+  console.log("Received token:", token) 
+  if (!token) {
+    return res.status(401).send("Unauthorized: No token provided")
   }
+  jwt.verify(token, secret_key, (err, decoded) => {
+    if (err) {
+      console.error("JWT verification error:", err.message) 
+      return res.status(403).send("Forbidden: Invalid or expired token")
+    }
+    console.log("Decoded token payload:", decoded)
+    req.userDetails = decoded
+    next()
+  })
+}
+
+//to know user type
+server.get('/auth/validate', (req, res) => {
+  const token = req.cookies.authToken 
+  if (!token) {
+    return res.json({ userType: 'guest' })
+  }
+  jwt.verify(token, secret_key, (err, decoded) => {
+    if (err) {
+      return res.json({ userType: 'guest' }) 
+    }
+    const userType = decoded.isAdmin ? 'admin' : 'user'
+    return res.json({ userType })
+  })
+})
+
+//to delete cookie once user is logged out
+server.get('/logout', (req, res) => {
+  res.clearCookie('authToken', { path: '/' }) 
+  res.status(200).send('Logged out successfully')
+})
 
 // 1. User Registration
 server.post("/user/register", async (req, res) => {
@@ -72,55 +94,53 @@ server.post("/user/register", async (req, res) => {
 
 // 2. Any User or Admin same Login Route
 server.post("/login", async (req, res) => {
-    const { email, password } = req.body
+  const { email, password } = req.body
+  const ADMIN_EMAIL = "admin@auction.com"
+  const ADMIN_PASSWORD = "NoorsAuction"
 
-    const ADMIN_EMAIL = "admin@auction.com"
-    const ADMIN_PASSWORD = "NoorsAuction"
-    if (email === ADMIN_EMAIL) {
-        if (password === ADMIN_PASSWORD) {
-            const token = generateToken(1, true) 
-            console.log("Generated Token (Admin):", token) 
-            return res.status(200).json({ token, admin: true })
-        } else {
-            return res.status(401).json({ message: "Invalid admin credentials" })
-        }
+  if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+    const token = generateToken(1, true) 
+    res.cookie("authToken", token, { httpOnly: true, sameSite: "Strict" })
+    return res.status(200).json({ message: "Admin login successful" })
+  }
+
+  db.get("SELECT * FROM USER WHERE EMAIL = ?", [email], async (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ message: "Invalid credentials" })
     }
-    // User Login
-    db.get("SELECT * FROM USER WHERE EMAIL = ?", [email], async (err, row) => {
-        if (err || !row) {
-            return res.status(401).json({ message: "Invalid user credentials" })
-        }
 
-        const passwordMatch = await bcrypt.compare(password, row.PASSWORD)
-        if (!passwordMatch) {
-            return res.status(401).json({ message: "Invalid user credentials" })
-        }
+    const passwordMatch = await bcrypt.compare(password, user.PASSWORD)
+    if (!passwordMatch) {
+      return res.status(401).json({ message: "Invalid credentials" })
+    }
 
-        const token = generateToken(row.ID, row.ISADMIN) 
-        console.log("Generated Token (User):", token) 
-        return res.status(200).json({ token, admin: row.ISADMIN === 1 })
-    })
+    const token = generateToken(user.ID, user.ISADMIN)
+    res.cookie("authToken", token, { httpOnly: true, sameSite: "Strict" })
+    return res.status(200).json({ message: "Login successful" })
+  })
 })
+
 
 // 3. Admin Users list
 server.get("/admin/view_users", verifyToken, (req, res) => {
-    const isAdmin = req.userDetails.isAdmin 
-    if (!isAdmin) {
-      console.log("Access denied: User is not an admin")
-      return res.status(403).send("You are not an admin")
-    }
-    db.all("SELECT ID, NAME, EMAIL, IDNUMBER FROM USER", (err, rows) => {
-      if (err) {
-        console.error("Error retrieving users:", err.message)
-        return res.status(500).send("Error retrieving users")
-      }
-      console.log("Users retrieved successfully:", rows)
-      res.status(200).json(rows)
-    })
-  })  
+  if (!req.userDetails.isAdmin) {
+    return res.status(403).send("Forbidden: You are not an admin")
+  }
 
+  db.all("SELECT ID, NAME, EMAIL, IDNUMBER FROM USER", (err, rows) => {
+    if (err) {
+      return res.status(500).send("Error retrieving users")
+    }
+    res.status(200).json(rows)
+  })
+})
+  
 // 4. Admin List Creation
 server.post("/admin/create_listing", upload.single("image"), verifyToken, (req, res) => {
+  const { isAdmin } = req.userDetails 
+  if (!isAdmin) {
+    return res.status(403).send('Access denied: You are not an admin.')
+  }
   const { category, name, brand, style, size, color, hardware, material, startingBid, duration } = req.body
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null
   if (!imageUrl) {
@@ -165,7 +185,7 @@ server.get("/admin/all_listings", verifyToken, (req, res) => {
 })
 
 // 6. Handbags Listings
-server.get("/listings/handbags", verifyToken, (req, res) => {
+server.get("/listings/handbags", (req, res) => {
   db.all("SELECT * FROM LISTING WHERE CATEGORY = ?", 
   ['Handbags'], 
   (err, rows) => {
@@ -178,7 +198,7 @@ server.get("/listings/handbags", verifyToken, (req, res) => {
 })
 
 // 7. Watches Listings
-server.get("/listings/watches", verifyToken, (req, res) => {
+server.get("/listings/watches", (req, res) => {
   db.all("SELECT * FROM LISTING WHERE CATEGORY = ?", 
   ['Watches'], 
   (err, rows) => { 
@@ -342,7 +362,6 @@ server.post("/bid", verifyToken, (req, res) => {
 // 13. User Bids
 server.get("/user/bids", verifyToken, (req, res) => {
   const userId = req.userDetails.id
-
   db.all(
     `SELECT B.ID AS BID_ID, B.BID_AMOUNT, B.CREATED_AT, L.NAME AS LISTING_NAME 
      FROM BIDDING B
